@@ -370,7 +370,6 @@ class Zip extends ZipArchive {
 class DB extends PDO {
 
     public function __construct($dbase, $database_dsn, $database_user, $database_password) {
-        $this->dbase = $dbase;
         try {
             parent::__construct($database_dsn, $database_user, $database_password, array());
         } catch (PDOException $error) {
@@ -390,6 +389,7 @@ class ModxUtilities {
     private $config,
             $log = array(),
             $zip,
+            $db = null,
             $timestamp,
             $installOrUpgrade,
             $newInstall = false;
@@ -478,15 +478,25 @@ class ModxUtilities {
             require $this->config->core_path . '/config/config.inc.php';
             $this->config->table_prefix = $table_prefix;
             $this->config->dbase = $dbase;
-            $this->config->database_dsn = $database_dsn;
-            $this->config->database_user = $database_user;
-            $this->config->database_password = $database_password;
             $this->config->lastInstallTime = $lastInstallTime;
             $this->config->site_id = $site_id;
             $this->config->site_sessionname = $site_sessionname;
             $this->config->https_port = $https_port;
             $this->config->uuid = $uuid;
+            $this->db = new DB($dbase, $database_dsn, $database_user, $database_password);
         }
+    }
+    
+    private function getSiteName() {
+        if ($this->db) {
+            $stmt = $this->db->prepare("SELECT `value` FROM " . $this->config->table_prefix . "system_settings WHERE `key`='site_name'");
+            $stmt->execute();
+            $site_name = $stmt->fetch(PDO::FETCH_OBJ);
+            if ($site_name) {
+                return str_replace(' ', '_', preg_replace('/[^a-z0-9 ]/', '', iconv("UTF-8", "ASCII//TRANSLIT//IGNORE", transliterator_transliterate('Any-Latin; Latin-ASCII; Lower()', $site_name->value))));
+            }
+        }
+        return '';
     }
     
     public function getLatestVersion() {
@@ -513,15 +523,6 @@ class ModxUtilities {
         return $version;
     }
 
-    private function getDB() {
-        if ($this->installed) {
-            return new DB($this->config->dbase, $this->config->database_dsn, $this->config->database_user, $this->config->database_password);
-        } else {
-            $this->log('Cannot find a MODX installation. Aborting!', true);
-            return false;
-        }
-    }
-    
     private function getFile() {
         if (strpos($this->filename, 'http') === 0) {
             $path = $this->filename;
@@ -595,7 +596,11 @@ class ModxUtilities {
 
     public function backup() {
         $return = true;
-        $zip_file = $this->config->backup_path . '/site_backup_' . $this->timestamp . '.zip';
+        $site_name = $this->getSiteName();
+        if ($site_name != '') {
+            $site_name .= '_';
+        }
+        $zip_file = $this->config->backup_path . '/site_backup_' . $site_name . $this->timestamp . '.zip';
         $zipfile = basename($zip_file);
         if (!is_dir($this->config->backup_path)) {
             mkdir($this->config->backup_path, 0755, true);
@@ -672,63 +677,98 @@ class ModxUtilities {
         }
         return $uploaded;
     }
-
-    public function restoreFromRemote() {
-        $file = preg_replace('/[^\d]/', '', $_POST['backupfile']);
-        $remote_file = $this->config->ftp->remote_path . '/site_backup_' . vsprintf('%s_%s', str_split($file, 6)) . '.zip';
-        $local_file = $this->config->backup_path . '/_site_backup_' . time() . '.zip';
-        $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($file, 6)) . '.sql';
-
-        $this->log('Downloading remote file');
-        $handle = fopen($local_file, 'w');
+    
+    private function listRemoteFiles() {
         $ch = curl_init();
         curl_setopt_array($ch, array(
-            CURLOPT_URL => 'ftp://' . $this->config->ftp->server . $remote_file,
+            CURLOPT_URL => 'ftp://' . $this->config->ftp->server . $this->config->ftp->remote_path . '/',
             CURLOPT_USERPWD => $this->config->ftp->username . ':' . $this->config->ftp->password,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FILE => $handle
+            CURLOPT_FTPLISTONLY => true,
+            CURLOPT_RETURNTRANSFER => true
         ));
-        $downloaded = curl_exec($ch);
-        $error = curl_error($ch);
+        $remoteFiles = curl_exec($ch);
         curl_close($ch);
-        fclose($handle);
-        
-        if ($downloaded) {
-            $this->log('Remote file downloaded');
-            if (is_readable($local_file)) {
-                $this->filename = basename($local_file);
-                $this->deleteBeforeImport = true;
-                if ($this->importFile()) {
-                    if (unlink($local_file)) {
-                        $this->log('Removed local file');
-                    } else {
-                        $this->log('Could not remove local file', true);
+
+        if ($remoteFiles !== false) {
+            $remoteFiles = array_map('trim', explode("\n", trim($remoteFiles)));
+        }
+        return $remoteFiles;
+    }
+
+    public function restoreFromRemote() {
+        $remoteFiles = $this->listRemoteFiles();
+        $files = array();
+        if ($remoteFiles !== false) {
+            $timestamp = preg_replace('/[^\d]/', '', $_POST['backupfile']);
+            $remote_file = false;
+            foreach ($remoteFiles as $file) {
+                if (strpos($file, vsprintf('%s_%s', str_split($timestamp, 6)) . '.zip') !== false) {
+                    $remote_file = $this->config->ftp->remote_path . '/' . $file;
+                    break;
+                }
+            }
+            if (! $remote_file) {
+                $this->log('Could not find remote file. Aborting!', true);
+                return false;
+            }
+            
+            $local_file = $this->config->backup_path . '/_site_backup_' . time() . '.zip';
+            $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($timestamp, 6)) . '.sql';
+
+            $this->log('Downloading remote file');
+            $handle = fopen($local_file, 'w');
+            $ch = curl_init();
+            curl_setopt_array($ch, array(
+                CURLOPT_URL => 'ftp://' . $this->config->ftp->server . $remote_file,
+                CURLOPT_USERPWD => $this->config->ftp->username . ':' . $this->config->ftp->password,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FILE => $handle
+            ));
+            $downloaded = curl_exec($ch);
+            $error = curl_error($ch);
+            curl_close($ch);
+            fclose($handle);
+            
+            if ($downloaded) {
+                $this->log('Remote file downloaded');
+                if (is_readable($local_file)) {
+                    $this->filename = basename($local_file);
+                    $this->deleteBeforeImport = true;
+                    if ($this->importFile()) {
+                        if (unlink($local_file)) {
+                            $this->log('Removed local file');
+                        } else {
+                            $this->log('Could not remove local file', true);
+                        }
+                        if (! $this->installed) {
+                            $this->installed = true;
+                            $this->includeConfig();
+                        }
+                        if ($this->config->updateConfigFilesAfterRestore) {
+                            $this->updateConfigIncFile();
+                            $this->updateConfigCoreFiles();
+                        }
+                        $this->importSQL($sqlfile);
                     }
-                    if (! $this->installed) {
-                        $this->installed = true;
-                        $this->includeConfig();
-                    }
-                    if ($this->config->updateConfigFilesAfterRestore) {
-                        $this->updateConfigIncFile();
-                        $this->updateConfigCoreFiles();
-                    }
-                    $this->importSQL($sqlfile);
+                } else {
+                    $this->log('Cannot access the archive file. Aborting!', true);
                 }
             } else {
-                $this->log('Cannot access the archive file. Aborting!', true);
+                $this->log('Could not download remote file. Aborting!', true);
+                $this->log($error, true);
             }
         } else {
-            $this->log('Could not download remote file. Aborting!', true);
-            $this->log($error, true);
+            $this->log('Could not list remote files. Aborting!', true);
         }
     }
 
     public function restore() {
-        $file = preg_replace('/[^\d]/', '', $_POST['backupfile']);
-        $files = 'site_backup_' . vsprintf('%s_%s', str_split($file, 6)) . '.zip';
-        $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($file, 6)) . '.sql';
-        if (is_readable($this->config->backup_path . '/' . $files)) {
-            $this->filename = $files;
+        $timestamp = preg_replace('/[^\d]/', '', $_POST['backupfile']);
+        $files = glob($this->config->backup_path . '/site_backup_*' . vsprintf('%s_%s', str_split($timestamp, 6)) . '.zip', GLOB_BRACE);
+        $zip_file = basename($files[0]);
+        $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($timestamp, 6)) . '.sql';
+        if (is_readable($this->config->backup_path . '/' . $zip_file)) {
+            $this->filename = $zip_file;
             $this->deleteBeforeImport = true;
             if ($this->importFile()) {
                 if (! $this->installed) {
@@ -747,46 +787,47 @@ class ModxUtilities {
     }
     
     private function getLanguage() {
-        if (isset($_SESSION['language'])) {
-            return $_SESSION['language'];
-        } else {
-            $db = $this->getDB();
-            if ($db === false) {
-                $this->log('Could not connect to database!', true);
-                return false;
-            }
-            $stmt = $db->prepare("SELECT `value` FROM " . $this->config->table_prefix . "system_settings WHERE `key`='manager_language'");
-            $stmt->execute();
-            $language = $stmt->fetch(PDO::FETCH_OBJ);
-            $_SESSION['language'] = $language->value;
-            return $language->value;
-        }
+        $stmt = $this->db->prepare("SELECT `value` FROM " . $this->config->table_prefix . "system_settings WHERE `key`='manager_language'");
+        $stmt->execute();
+        $language = $stmt->fetch(PDO::FETCH_OBJ);
+        return $language->value;
     }
     
     public function getBackupFiles() {
+        $site_name = $this->getSiteName();
+        if ($site_name) {
+            $files = glob($this->config->backup_path . '/site_backup_' . $site_name . '_*.zip', GLOB_BRACE);
+            if (! empty($files)) {
+                return array_map(function($v) {
+                    return array(preg_replace('/[^\d]/', '', basename($v)), '');
+                }, $files);
+            }
+        }
         $files = glob($this->config->backup_path . '/site_backup_*.zip', GLOB_BRACE);
         return array_map(function($v) {
-            return preg_replace('/[^\d]/', '', basename($v));
+            $site_name = substr(basename($v), 12, -18);
+            return array(preg_replace('/[^\d]/', '', basename($v)), $site_name);
         }, $files);
     }
     
     public function getRemoteBackupFiles() {
-        $ch = curl_init();
-        curl_setopt_array($ch, array(
-            CURLOPT_URL => 'ftp://' . $this->config->ftp->server . $this->config->ftp->remote_path . '/',
-            CURLOPT_USERPWD => $this->config->ftp->username . ':' . $this->config->ftp->password,
-            CURLOPT_FTPLISTONLY => true,
-            CURLOPT_RETURNTRANSFER => true
-        ));
-        $remoteFiles = curl_exec($ch);
-        curl_close($ch);
-        
+        $remoteFiles = $this->listRemoteFiles();
         $files = array();
         if ($remoteFiles !== false) {
-            $remoteFiles = explode("\n", $remoteFiles);
-            foreach ($remoteFiles as $file) {
-                if (preg_match('/^site_backup_\d{6}_\d{6}.zip$/', trim($file))) {
-                    $files[] = preg_replace('/[^\d]/', '', $file);
+            $site_name = $this->getSiteName();
+            if ($site_name) {
+                foreach ($remoteFiles as $file) {
+                    if (preg_match('/^site_backup_' . $site_name . '_\d{6}_\d{6}.zip$/', $file)) {
+                        $files[] = array(preg_replace('/[^\d]/', '', $file), '');
+                    }
+                }
+            }
+            if (empty($files)) {
+                foreach ($remoteFiles as $file) {
+                    if (preg_match('/^site_backup_[a-z0-9_]*\d{6}_\d{6}.zip$/', $file)) {
+                        $name = substr(basename(trim($file)), 12, -18);
+                        $files[] = array(preg_replace('/[^\d]/', '', $file), $name);
+                    }
                 }
             }
         }
@@ -951,9 +992,13 @@ class ModxUtilities {
                     set_error_handler(array($this, 'rmdirHandler'), E_WARNING);
                     $this->deltree($this->config->core_path, $this->installOrUpgrade, true);
                     $this->deltree($this->config->manager_path, $this->installOrUpgrade, true);
-                    $this->config->excludeOnDelete[] = $this->config->core_path;
-                    $this->config->excludeOnDelete[] = $this->config->manager_path;
-                    $this->deltree($this->config->base_path, $this->installOrUpgrade, true);
+                    if ($this->installOrUpgrade) {
+                        $this->config->excludeOnDelete[] = $this->config->core_path;
+                        $this->config->excludeOnDelete[] = $this->config->manager_path;
+                    } else {
+                        $this->config->excludeOnDelete = array($this->normalizePath(__FILE__));
+                    }
+                    $this->deltree($this->config->base_path, true, true);
                     restore_error_handler();
                     $this->log('Old installation removed');
                 }
@@ -1094,29 +1139,23 @@ class ModxUtilities {
         
         $this->log('Exporting database');
         
-        $db = $this->getDB();
-        if ($db === false) {
-            $this->log('Could not connect to database!', true);
-            return false;
-        }
-        
         // http://davidwalsh.name/backup-mysql-database-php
         
         //get all of the tables
-        $stmt = $db->prepare('SHOW TABLES');
+        $stmt = $this->db->prepare('SHOW TABLES');
         $stmt->execute();
         $all = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $tables = array();
         foreach ($all as $table) {
-            $tables[] = $table['Tables_in_' . $db->dbase];
+            $tables[] = $table['Tables_in_' . $this->config->dbase];
         }
         
         $sqlfile = 'db_backup_' . $this->timestamp . '.sql';
         
         $handle = fopen($this->config->backup_path . '/' . $sqlfile, 'w+');
         
-        $stmt = $db->prepare("SHOW VARIABLES WHERE Variable_name='max_allowed_packet'");
+        $stmt = $this->db->prepare("SHOW VARIABLES WHERE Variable_name='max_allowed_packet'");
         $stmt->execute();
         $max_allowed_packet = $stmt->fetch(PDO::FETCH_ASSOC);
         $max_length = $max_allowed_packet['Value'] < 100000 ? $max_allowed_packet['Value'] : 100000;
@@ -1137,7 +1176,7 @@ class ModxUtilities {
 
         //cycle through
         foreach ($tables as $table) {
-            $stmt = $db->prepare('SHOW COLUMNS FROM ' . $table);
+            $stmt = $this->db->prepare('SHOW COLUMNS FROM ' . $table);
             $stmt->execute();
             $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1148,7 +1187,7 @@ class ModxUtilities {
             
             $to_print = 'DROP TABLE IF EXISTS `' . $table . '`;';
             
-            $stmt = $db->prepare('SHOW CREATE TABLE ' . $table);
+            $stmt = $this->db->prepare('SHOW CREATE TABLE ' . $table);
             $stmt->execute();
             $create = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -1169,7 +1208,7 @@ class ModxUtilities {
             
                 $insert_into = 'INSERT INTO `' . $table . '` (`' . implode('`,`', $column) . "`) VALUES\n";
 
-                $stmt = $db->prepare('SELECT * FROM ' . $table);
+                $stmt = $this->db->prepare('SELECT * FROM ' . $table);
                 $stmt->execute();
                 $num_fields = $stmt->columnCount();
                 
@@ -1258,18 +1297,13 @@ class ModxUtilities {
     }
     
     private function importSQL($sqlfile) {
-        $db = $this->getDB();
-        if ($db === false) {
-            $this->log('Could not connect to database!', true);
-            return;
-        }
-        $db->setAttribute(PDO::ATTR_EMULATE_PREPARES, 0);
+        $this->db->setAttribute(PDO::ATTR_EMULATE_PREPARES, 0);
         
         if (is_readable($this->config->backup_path . '/' . $sqlfile)) {
             $sql = file_get_contents($this->config->backup_path . '/' . $sqlfile);
             $this->log('Importing DB');
             try {
-                if ($db->exec($sql) !== false) {
+                if ($this->db->exec($sql) !== false) {
                     $this->log('DB imported');
                 } else {
                     $this->log('Could not import DB!', true);
@@ -1560,8 +1594,8 @@ if (!isset($_POST['action'])) {
     $backupfiles = $utility->getConfig('restoreFromRemote') ? $utility->getRemoteBackupFiles() : $utility->getBackupFiles();
     $backups = array();
     foreach ($backupfiles as $file) {
-        $date = vsprintf('20%s-%s-%s %s:%s:%s', str_split($file, 2));
-        $backups[] = '<label><input type="radio" value="' . $file . '" name="backupfile" /> ' . $date . '</label>';
+        $date = vsprintf('20%s-%s-%s %s:%s:%s', str_split($file[0], 2));
+        $backups[] = '<label><input type="radio" value="' . $file[0] . '" name="backupfile" /> ' . $date . ' ' . $file[1] . '</label>';
     }
     if (empty($backups)) {
         $backups[] = '<label>No files to import</label>';
