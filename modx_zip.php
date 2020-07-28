@@ -77,12 +77,13 @@
  *
  *
  * AUTHOR: Pontus Ågren (Pont)
+ * VERSION: 2017-08-30
  *
  */
 
 
 ini_set('max_execution_time', 600);
-
+ini_set('memory_limit', '256M');
 
 if ($_SERVER['HTTP_HOST'] != 'localhost') {
     
@@ -96,7 +97,7 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
     $config = array(
         
         /**
-         * You can reuse a defined path by prefixing it's name with a #, ex '#base_path/core'.
+         * You can reuse a defined path by prefixing its name with a #, ex '#base_path/core'.
          * The path must have been defined before you can reuse it.
          *
          * All paths are normalized so you can use '#base_path/..' to move upwards in the path.
@@ -181,7 +182,7 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
         'usecli' => false, // boolean
         
         // Data to use when installing via cli. Also used to update config.inc.php and all
-        // config.core.php files.  This is useful if you want to restore a backup from the live
+        // config.core.php files. This is useful if you want to restore a backup from the live
         // server on your local dev server and vice versa. In this way you can develop a site
         // locally (or a new version of it), back it up and then restore it on the live site without
         // having to do an update. Make sure that only the database keys differ between the local
@@ -240,6 +241,13 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
         // configuration files by hand.
         // Uses data from the xmldata options.
         'updateConfigFilesAfterRestore' => false,
+        
+        // Use addFromString (true) or addFile (false)
+        // addFromString uses A LOT of memory. Set to false if you run into memory limit problems.
+        'addFromString' => true,
+        
+        // Compress archive?
+        'compressArchive' => true,
         
         // Should this file be removed after update/install?
         'removeThisFile' => false // boolean
@@ -328,6 +336,8 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
             'remove_setup_directory' => 1
         ),
         'updateConfigFilesAfterRestore' => false,
+        'compressArchive' => true,
+        'addFromString' => false,
         'removeThisFile' => false
     );
 
@@ -335,22 +345,71 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
 
 ini_set('display_errors', 0);
 
+date_default_timezone_set('Europe/Stockholm');
+setlocale(LC_ALL, array('sv_SE.UTF-8','sv_SE@euro','sv_SE','swedish'));
+
 header('Content-Type: text/html; charset=UTF-8');
 
-class Zip extends ZipArchive {
+
+/**
+ *  New areas of research
+ *
+ *  https://github.com/Grandt/PHPZip
+ *  https://github.com/phpmyadmin/phpmyadmin/blob/master/libraries/ZipFile.php
+ *  https://gist.github.com/phred/1e2aa1e096ddb1ee7f84
+ *  https://github.com/maennchen/ZipStream-PHP
+ *  http://www.tinybutstrong.com/apps/tbszip/tbszip_help.html
+ *  http://www.phpconcept.net/pclzip
+ *  
+ *
+ */
+
+
+class Zip extends ZipArchive
+{
     
     private $excludeInZip = array(),
+            $compress = false,
             $root = '';
     
-    public function setExcluded($dirs) {
+    public function setExcluded($dirs)
+    {
         $this->excludeInZip = $dirs;
     }
     
-    public function setRoot($dir) {
+    public function setMethod($fromString)
+    {
+        $this->fromString = $fromString;
+    }
+    
+    public function setCompression($compress)
+    {
+        $this->compress = $compress;
+    }
+    
+    public function setRoot($dir)
+    {
         $this->root = $dir;
     }
     
-    public function addAll($path) {
+    public function addOne($filename, $localname)
+    {
+        if ($this->fromString) {
+            /* $content = file_get_contents($filename);
+            $success = $this->addFromString($localname, $content);
+            unset($content); */
+            $success = $this->addFromString($localname, file_get_contents($filename));
+        } else {
+            $success = $this->addFile($filename, $localname);
+        }
+        if ($success && ! $this->compress) {
+            $this->setCompressionName($localname, ZipArchive::CM_STORE);
+        }
+        return $success;
+    }
+    
+    public function addAll($path)
+    {
         $nodes = glob($path . '/{*,.htaccess}', GLOB_BRACE);
         if (!empty($nodes)) {
             foreach ($nodes as $node) {
@@ -360,7 +419,7 @@ class Zip extends ZipArchive {
                         $this->addAll($node);
                     }
                 } else if (is_file($node) && ! in_array($node, $this->excludeInZip)) {
-                    $this->addFile($node, str_replace($this->root, '', $node));
+                    $this->addOne($node, str_replace($this->root, '', $node));
                 }
             }
         }
@@ -392,18 +451,27 @@ class ModxUtilities {
             $db = null,
             $timestamp,
             $installOrUpgrade,
-            $newInstall = false;
+            $newInstall = false,
+            $distro = null,
+            $version = null,
+            $backupfile = null,
+            $file = null,
+            $password = null,
+            $deletebeforeimport = null;
             
     public $installed,
-           $deleteBeforeImport = false,
+           $action = null,
            $currentversion = '',
            $currentdistro = '';
     
     public function __construct($config) {
         $this->setVariables($config);
+        $this->setPostedProperties();
         $this->checkInstalled();
         $this->zip = new Zip;
         $this->zip->setExcluded($this->config->excludeInBackup);
+        $this->zip->setMethod($this->config->addFromString);
+        $this->zip->setCompression($this->config->compressArchive);
         $this->timestamp = date('ymd_His');
     }
     
@@ -412,6 +480,10 @@ class ModxUtilities {
     }
     public function getLog() {
         return implode("\n", $this->log);
+    }
+    
+    public function authenticated() {
+        return $this->password;
     }
     
     public function getConfig($key) {
@@ -440,13 +512,13 @@ class ModxUtilities {
 
     private function replaceValues($value) {
         if (is_array($value)) {
-            while (list($k, $v) = each($value)) {
+            foreach ($value as $k => $v) {
                 $value[$k] = $this->replaceValues($v);
             }
         } else {
             $value = str_replace('\\', '/', $value);
             if (preg_match('/^#([a-z]+_[a-z]+)/', $value, $matches)) {
-                $value = str_replace('#' . $matches[1], $this->config->$matches[1], $value);
+                $value = str_replace('#' . $matches[1], $this->config->{$matches[1]}, $value);
             }
             $value = (strpos($value, '/') !== false) ? $this->normalizePath($value) : $value;
         }
@@ -459,6 +531,39 @@ class ModxUtilities {
             $this->config->$key = $this->replaceValues($value);
         }
         $this->config->ftp = (object)$this->config->ftp;
+    }
+    
+    private function setPostedProperties() {
+        $variables = ['action', 'distro', 'version', 'backupfile', 'file', 'password', 'deletebeforeimport'];
+        foreach ($variables as $key) {
+            if (isset($_POST[$key])) {
+                switch ($key) {
+                    case 'action':
+                        $this->action = preg_replace('/[^a-z]+/', '', $_POST['action']);
+                        break;
+                    case 'distro':
+                        $this->distro = in_array($_POST['distro'], array('traditional', 'advanced')) ? $_POST['distro'] : false;
+                        break;
+                    case 'version':
+                        $this->version = (preg_match('/^\d+\.\d+\.\d+$/', $_POST['version'])) ? $_POST['version'] : false;
+                        break;
+                    case 'backupfile':
+                        $this->backupfile = (preg_match('/^[\d]{12}$/', $_POST['backupfile'])) ? $_POST['backupfile'] : false;
+                        break;
+                    case 'file':
+                        $this->file = (preg_match('/^[\w\-\.]+.zip$/', $_POST['file'])) ? $_POST['file'] : false;
+                        break;
+                    case 'password':
+                        $this->password = ($_POST['password'] === PASSWORD);
+                        break;
+                    case 'deletebeforeimport':
+                        $this->deletebeforeimport = true;
+                        break;
+                }
+            } else {
+                $this->$key = null;
+            }
+        }
     }
     
     private function checkInstalled() {
@@ -493,7 +598,13 @@ class ModxUtilities {
             $stmt->execute();
             $site_name = $stmt->fetch(PDO::FETCH_OBJ);
             if ($site_name) {
-                return str_replace(' ', '_', preg_replace('/[^a-z0-9 ]/', '', iconv("UTF-8", "ASCII//TRANSLIT//IGNORE", transliterator_transliterate('Any-Latin; Latin-ASCII; Lower()', $site_name->value))));
+                if (function_exists('transliterator_transliterate') && $transliterator = Transliterator::create('Any-Latin; Latin-ASCII; Lower()')) {
+                    return str_replace(' ', '_', preg_replace('/[^a-z0-9 ]/', '', iconv("UTF-8", "ASCII//TRANSLIT//IGNORE", $transliterator->transliterate($site_name->value))));
+                } else {
+                    ini_set('mbstring.substitute_character', "none");
+                    $site_name->value = mb_convert_encoding($site_name->value, 'UTF-8', 'UTF-8');
+                    return str_replace(' ', '_', iconv('UTF-8', 'ASCII//TRANSLIT', $site_name->value));
+                }
             }
         }
         return '';
@@ -506,39 +617,61 @@ class ModxUtilities {
         } else {
             $ch = curl_init();
             curl_setopt_array($ch, array(
-                CURLOPT_URL => 'http://modx.com/download/',
+                CURLOPT_URL => 'https://modx.com/download/latest',
+                CURLOPT_NOBODY => true,
+                CURLOPT_RETURNTRANSFER => false,
+                CURLOPT_HEADER => false,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+                CURLOPT_SSL_VERIFYPEER => false
+            ));
+            curl_exec($ch);
+            $headers = curl_getinfo($ch);
+            curl_close($ch);
+            if ($headers !== false) {
+                $file = explode('/', $headers['url']);
+                $file = array_pop($file);
+                if (preg_match('/\d+\.\d+\.\d+/', $file, $version)) {
+                    $_SESSION['version'] = $version[0];
+                    $version = $version[0];
+                }
+            }
+
+            /*
+            $ch = curl_init();
+            curl_setopt_array($ch, array(
+                CURLOPT_URL => 'https://modx.com/download',
                 CURLOPT_RETURNTRANSFER => 1,
-                CURLOPT_CONNECTTIMEOUT => 10
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_SSL_VERIFYPEER => false
             ));
             $page = curl_exec($ch);
             curl_close($ch);
             if ($page !== false) {
-                preg_match('/' . preg_quote('<h3>MODX Revolution ') . '([\d\.]+).*' . preg_quote('</h3>', '/') . '/', $page, $match);
+                preg_match('/' . preg_quote('<h2>Current Version – ') . '([\d\.]+).*' . preg_quote('</h2>', '/') . '/', $page, $match);
                 if (isset($match[1])) {
                     $_SESSION['version'] = $match[1];
                     $version = $match[1];
                 }
             }
+            */
         }
         return $version;
     }
 
     private function getFile() {
-        if (strpos($this->filename, 'http') === 0) {
-            $path = $this->filename;
-            $this->filename = basename($this->filename);
+        $this->filename = 'modx-' . $this->version . '-pl' . ($this->distro == 'advanced' ? '-advanced' : '') . '.zip';
+        if (is_readable($this->config->backup_path . '/' . $this->filename)) {
+            $this->log('Using local file');
+            return true;
+        } else {
+            $path = 'https://modx.com/download/direct?id=' . $this->filename;
             $this->log('Downloading file: ' . $this->filename);
             if ($this->downloadFile($path)) {
                 $this->log('File downloaded');
                 return true;
             } else {
                 $this->log('Error downloading file. Aborting!', true);
-            }
-        } else {
-            if (preg_match('/^[\w\-\.]+.zip$/', $this->filename) && is_readable($this->config->backup_path . '/' . $this->filename)) {
-                return true;
-            } else {
-                $this->log('File could not be read. Aborting!', true);
             }
         }
         return false;
@@ -563,6 +696,7 @@ class ModxUtilities {
             CURLOPT_URL => $url,
             CURLOPT_NOBODY => true,
             CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_HEADER => false,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3
@@ -580,7 +714,7 @@ class ModxUtilities {
             CURLOPT_URL => $url,
             CURLOPT_RETURNTRANSFER => false,
             CURLOPT_BINARYTRANSFER => true,
-            //CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
             CURLOPT_CONNECTTIMEOUT => 50,
@@ -622,7 +756,7 @@ class ModxUtilities {
             $this->log('Files zipped');
             
             $sqlfile = $this->exportSQL();
-            if ($sqlfile && $this->zip->addFile($this->config->backup_path . '/' . $sqlfile, $sqlfile)) {
+            if ($sqlfile && $this->zip->addOne($this->config->backup_path . '/' . $sqlfile, $sqlfile)) {
                 $this->log('SQL file added to zip');
             } else {
                 $this->log('Could not add SQL file to zip', true);
@@ -699,10 +833,10 @@ class ModxUtilities {
         $remoteFiles = $this->listRemoteFiles();
         $files = array();
         if ($remoteFiles !== false) {
-            $timestamp = preg_replace('/[^\d]/', '', $_POST['backupfile']);
+            //$timestamp = preg_replace('/[^\d]/', '', $this->backupfile);
             $remote_file = false;
             foreach ($remoteFiles as $file) {
-                if (strpos($file, vsprintf('%s_%s', str_split($timestamp, 6)) . '.zip') !== false) {
+                if (strpos($file, vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.zip') !== false) {
                     $remote_file = $this->config->ftp->remote_path . '/' . $file;
                     break;
                 }
@@ -713,7 +847,7 @@ class ModxUtilities {
             }
             
             $local_file = $this->config->backup_path . '/_site_backup_' . time() . '.zip';
-            $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($timestamp, 6)) . '.sql';
+            $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.sql';
 
             $this->log('Downloading remote file');
             $handle = fopen($local_file, 'w');
@@ -733,7 +867,7 @@ class ModxUtilities {
                 $this->log('Remote file downloaded');
                 if (is_readable($local_file)) {
                     $this->filename = basename($local_file);
-                    $this->deleteBeforeImport = true;
+                    $this->deletebeforeimport = true;
                     if ($this->importFile()) {
                         if (unlink($local_file)) {
                             $this->log('Removed local file');
@@ -763,13 +897,13 @@ class ModxUtilities {
     }
 
     public function restore() {
-        $timestamp = preg_replace('/[^\d]/', '', $_POST['backupfile']);
-        $files = glob($this->config->backup_path . '/site_backup_*' . vsprintf('%s_%s', str_split($timestamp, 6)) . '.zip', GLOB_BRACE);
+        //$timestamp = preg_replace('/[^\d]/', '', $this->backupfile);
+        $files = glob($this->config->backup_path . '/site_backup_*' . vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.zip', GLOB_BRACE);
         $zip_file = basename($files[0]);
-        $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($timestamp, 6)) . '.sql';
+        $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.sql';
         if (is_readable($this->config->backup_path . '/' . $zip_file)) {
             $this->filename = $zip_file;
-            $this->deleteBeforeImport = true;
+            $this->deletebeforeimport = true;
             if ($this->importFile()) {
                 if (! $this->installed) {
                     $this->installed = true;
@@ -835,9 +969,15 @@ class ModxUtilities {
     }
     
     public function import() {
-        if (preg_match('/^[\w\-\.]+.zip$/', $_POST['file']) && is_readable($this->config->backup_path . '/' . $_POST['file'])) {
-            $this->filename = $_POST['file'];
+        if ($this->file && is_readable($this->config->backup_path . '/' . $this->file)) {
+            $this->filename = $this->file;
             $this->importFile();
+            if ($this->db) {
+                //$sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($this->file, 6)) . '.sql';
+                //$this->importSQL($sqlfile);
+            } else {
+                
+            }
         } else {
             $this->log('File could not be read. Aborting!', true);
         }
@@ -862,120 +1002,178 @@ class ModxUtilities {
         
     public function update() {
         $this->installOrUpgrade = true;
-        $distro = in_array($_POST['distro'], array('traditional', 'advanced')) ? $_POST['distro'] : false;
-        if ($distro) {
-            if (preg_match('/^\d+\.\d+\.\d+$/', $_POST['version'])) {
-                $current = vsprintf("%s%02s%02s", explode('.', $this->currentversion));
-                $new = vsprintf("%s%02s%02s", explode('.', $_POST['version']));
-                if ($new >= $current) {
-                    $this->filename = 'http://modx.com/download/direct/modx-' . $_POST['version'] . '-pl' . ($distro == 'advanced' ? "-$distro" : '') . '.zip';
-                    if (is_readable($this->config->backup_path . '/' . basename($this->filename))) {
-                        $this->filename = basename($this->filename);
-                    }
-                    if ($this->getFile()) {
-                        if ($this->config->backupBeforeUpdate) {
-                            $this->log('Running backup');
-                            if ($this->backup()) {
-                                $this->log('Backup complete');
-                            } else {
-                                $this->log('Could not backup website. Aborting!', true);
-                                return false;
-                            }
-                        }
-                        if (! $this->deleteBeforeImport) {
-                            $this->log('Deleting core/cache/');
-                            $this->deltree($this->config->core_path . '/cache', false, true);
-                        }
-                        if ($this->unpackFiles()) {
-                            $manual_install = true;
-                            if ($this->config->usecli) {
-                                $output = shell_exec('php -v');
-                                if (substr($output, 0, 3) == 'PHP') {
-                                    $this->log('Running upgrade in cli mode');
-                                    if ($this->createConfigXML()) {
-                                        $output = shell_exec('php -d error_reporting=0 ' . $this->config->base_path . '/setup/index.php --installmode=upgrade --core_path=' . $this->config->xmldata['core_path'] . ' --config=' . $this->config->backup_path . '/config.xml');
-                                        unlink($this->config->backup_path . '/config.xml');
-                                        $this->log(trim($output));
-                                        $manual_install = false;
-                                    }
-                                } else {
-                                    $this->log('Could not upgrade in cli mode', true);
-                                }
-                            }
-                            if ($manual_install) {
-                                $this->log('<a href="setup">Update the website immediately!</a>');
-                            }
-                            if ($this->config->removeThisFile) {
-                                if (unlink(__FILE__)) {
-                                    $this->log('This file is deleted');
-                                } else {
-                                    $this->log('Could not delete this file. Remove it manually.', true);
-                                }
-                            }
-                        } else {
-                            $this->log('Errors occurred during unpacking', true);
-                        }
-                    }
+        
+        if (! $this->distro) {
+            $this->log('Incorrect distro. Aborting!', true);
+            return false;
+        }
+        
+        if (! $this->version) {
+            $this->log('Incorrect version numbering. Aborting!', true);
+            return false;
+        }
+        
+        $current = vsprintf("%s%02s%02s", explode('.', $this->currentversion));
+        $new = vsprintf("%s%02s%02s", explode('.', $this->version));
+        if ($new < $current) {
+            $this->log('New version (' . $this->version . ') is older than current version (' . $this->currentversion . '). Aborting!', true);
+            return false;
+        }
+        
+        if ($this->getFile()) {
+            if ($this->config->backupBeforeUpdate) {
+                $this->log('Running backup');
+                if ($this->backup()) {
+                    $this->log('Backup complete');
                 } else {
-                    $this->log('New version (' . $_POST['version'] . ') is older than current version (' . $this->currentversion . '). Aborting!', true);
+                    $this->log('Could not backup website. Aborting!', true);
+                    return false;
+                }
+            }
+            if (! $this->deletebeforeimport) {
+                $this->log('Deleting core/cache/');
+                set_error_handler(array($this, 'rmdirHandler'), E_WARNING);
+                $this->deltree($this->config->core_path . '/cache', false, true);
+                restore_error_handler();
+            }
+            
+            /*
+            // From Janitor by Shamblett
+            // Remove the core directory and the transport.zip
+            set_error_handler(array($this, 'rmdirHandler'), E_WARNING);
+            $this->deltree($this->config->core_path . '/packages/core', false, true);
+            restore_error_handler();
+            $transportFile = $this->config->core_path . '/packages/core.transport.zip';
+            if (file_exists($transportFile)) {
+                unlink($transportFile);
+            }
+
+            require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
+            $modx = new modX();
+            $modx->initialize('mgr');
+            $modx->getService('error','error.modError', '', '');
+
+            // Empty the logs
+            if ($this->modx->exec("TRUNCATE {$modx->getTableName('modManagerLog')}") === false) {
+                $this->log('Could not truncate manager log', true);
+            }
+            if ($this->modx->exec("TRUNCATE {$modx->getTableName('modEventLog')}") === false) {
+                $this->log('Could not truncate event log', true');
+            }
+            $logFile = $modx->getOption(xPDO::OPT_CACHE_PATH) . 'logs/error.log';
+            if (file_exists($logFile)) {
+                $cacheManager = $modx->getCacheManager();
+                $cacheManager->writeFile($logFile, ' ');
+            }
+
+            // Clear the cache
+            $contexts = $modx->getCollection('modContext');
+            foreach ($contexts as $context) {
+                $paths[] = $context->get('key') . '/';
+            }
+            $options = array(
+                'publishing' => 1,
+                'extensions' => array('.cache.php', '.msg.php', '.tpl.php'),
+            );
+            if ($modx->getOption('cache_db')) {
+                $options['objects'] = '*';
+            }
+            $modx->cacheManager->clearCache($paths, $options);
+
+            // Flush permissions for the logged in user
+            if ($modx->getUser()) {
+                $modx->user->getAttributes(array(), '', true);
+            }
+
+            // Flush sessions
+            if ($modx->getOption('session_handler_class', null, 'modSessionHandler') == 'modSessionHandler') {
+                $sessionTable = $modx->getTableName('modSession');
+                $modx->exec("TRUNCATE {$sessionTable}");
+                $modx->user->endSession();
+            }
+            unset($modx);
+            */
+            
+            if ($this->unpackFiles()) {
+                $manual_install = true;
+                if ($this->config->usecli) {
+                    $output = shell_exec('php -v');
+                    if (substr($output, 0, 3) == 'PHP') {
+                        $this->log('Running upgrade in cli mode');
+                        if ($this->createConfigXML()) {
+                            $output = shell_exec('php -d error_reporting=0 ' . $this->config->base_path . '/setup/index.php --installmode=upgrade --core_path=' . $this->config->xmldata['core_path'] . ' --config=' . $this->config->backup_path . '/config.xml');
+                            unlink($this->config->backup_path . '/config.xml');
+                            $this->log(trim($output));
+                            $manual_install = false;
+                        }
+                    } else {
+                        $this->log('Could not upgrade in cli mode', true);
+                    }
+                }
+                if ($manual_install) {
+                    $this->log('<a href="setup">Update the website immediately!</a>');
+                }
+                if ($this->config->removeThisFile) {
+                    if (unlink(__FILE__)) {
+                        $this->log('This file is deleted');
+                    } else {
+                        $this->log('Could not delete this file. Remove it manually.', true);
+                    }
                 }
             } else {
-                $this->log('Incorrect version numbering. Aborting!', true);
+                $this->log('Errors occurred during unpacking', true);
             }
-        } else {
-            $this->log('Incorrect distro. Aborting!', true);
         }
     }
     
     public function install() {
         if ($this->installed) {
             $this->log('MODX already installed. Aborting!', true);
-        } else {
-            $this->installOrUpgrade = true;
-            $this->newInstall = true;
-            $distro = in_array($_POST['distro'], array('traditional', 'advanced')) ? $_POST['distro'] : false;
-            if ($distro) {
-                if (preg_match('/^\d+\.\d+\.\d+$/', $_POST['version'])) {
-                    $this->filename = 'http://modx.com/download/direct/modx-' . $_POST['version'] . '-pl' . ($distro == 'advanced' ? "-$distro" : '') . '.zip';
-                    if (is_readable($this->config->backup_path . '/' . basename($this->filename))) {
-                        $this->filename = basename($this->filename);
-                    }
-                    if ($this->getFile()) {
-                        if ($this->unpackFiles()) {
-                            $manual_install = true;
-                            if ($this->config->usecli) {
-                                $output = shell_exec('php -v');
-                                if (substr($output, 0, 3) == 'PHP') {
-                                    $this->log('Running install in cli mode');
-                                    if ($this->createConfigXML()) {
-                                        $output = shell_exec('php -d error_reporting=0 ' . $this->config->base_path . '/setup/index.php --installmode=new --core_path=' . $this->config->xmldata['core_path'] . ' --config=' . $this->config->backup_path . '/config.xml');
-                                        unlink($this->config->backup_path . '/config.xml');
-                                        $this->log(trim($output));
-                                        $manual_install = false;
-                                    }
-                                } else {
-                                    $this->log('Could not install in cli mode', true);
-                                }
-                            }
-                            if ($manual_install) {
-                                $this->log('<a href="/setup">Install the website immediately!</a>');
-                            }
-                            if ($this->config->removeThisFile) {
-                                if (unlink(__FILE__)) {
-                                    $this->log('This file is deleted');
-                                } else {
-                                    $this->log('Could not delete this file. Remove it manually.', true);
-                                }
-                            }
-                        } else {
-                            $this->log('Errors occurred during unpacking', true);
+            return false;
+        }
+        
+        $this->installOrUpgrade = true;
+        $this->newInstall = true;
+        
+        if (! $this->distro) {
+            $this->log('Incorrect distro. Aborting!', true);
+            return false;
+        }
+        
+        if (! $this->version) {
+            $this->log('Incorrect version numbering. Aborting!', true);
+            return false;
+        }
+        
+        if ($this->getFile()) {
+            if ($this->unpackFiles()) {
+                $manual_install = true;
+                if ($this->config->usecli) {
+                    $output = shell_exec('php -v');
+                    if (substr($output, 0, 3) == 'PHP') {
+                        $this->log('Running install in cli mode');
+                        if ($this->createConfigXML()) {
+                            $output = shell_exec('php -d error_reporting=0 ' . $this->config->base_path . '/setup/index.php --installmode=new --core_path=' . $this->config->xmldata['core_path'] . ' --config=' . $this->config->backup_path . '/config.xml');
+                            unlink($this->config->backup_path . '/config.xml');
+                            $this->log(trim($output));
+                            $manual_install = false;
                         }
+                    } else {
+                        $this->log('Could not install in cli mode', true);
                     }
-                } else {
-                    $this->log('Incorrect version numbering. Aborting!', true);
+                }
+                if ($manual_install) {
+                    $this->log('<a href="/setup">Install the website immediately!</a>');
+                }
+                if ($this->config->removeThisFile) {
+                    if (unlink(__FILE__)) {
+                        $this->log('This file is deleted');
+                    } else {
+                        $this->log('Could not delete this file. Remove it manually.', true);
+                    }
                 }
             } else {
-                $this->log('Incorrect distro. Aborting!', true);
+                $this->log('Errors occurred during unpacking', true);
             }
         }
     }
@@ -986,7 +1184,7 @@ class ModxUtilities {
         if (file_exists($zip_file)) {
             $zip = zip_open($zip_file);
             if ($zip) {
-                if ($this->deleteBeforeImport) {
+                if ($this->deletebeforeimport) {
                     // Clear out old installation
                     $this->log('Removing old installation');
                     set_error_handler(array($this, 'rmdirHandler'), E_WARNING);
@@ -1112,7 +1310,7 @@ class ModxUtilities {
         if (!is_dir($dirname)) {
             return false;
         }
-        foreach (glob($dirname . "/{*,.htaccess,.gitignore}", GLOB_BRACE) as $object) {
+        foreach (glob($dirname . "/{*,.htaccess,.gitignore,.DS_Store}", GLOB_BRACE) as $object) {
             if ($filtered ? ! in_array($object, $this->config->excludeOnDelete) : true) {
                 if (is_dir($object)) {
                     $this->deltree($object, $filtered);
@@ -1338,7 +1536,7 @@ class ModxUtilities {
         }
         $xml = new SimpleXMLElement('<modx/>');
         reset($this->config->xmldata);
-        while (list($key, $value) = each($this->config->xmldata)) {
+        foreach($this->config->xmldata as $key => $value) {
             if (strpos($key, 'path') !== false || strpos($key, 'url') !== false) {
                 // paths need trailing /
                 $value = rtrim($value, '/') . '/';
@@ -1589,7 +1787,7 @@ if ($_SESSION['time'] < time()) {
 
 $utility = new ModxUtilities($config);
 
-if (!isset($_POST['action'])) {
+if (is_null($utility->action)) {
 
     $backupfiles = $utility->getConfig('restoreFromRemote') ? $utility->getRemoteBackupFiles() : $utility->getBackupFiles();
     $backups = array();
@@ -1657,17 +1855,13 @@ if (!isset($_POST['action'])) {
     
 <?php
     
-} else if (isset($_POST['password']) && $_POST['password'] === PASSWORD) {
+} else if ($utility->authenticated() === true) {
 
-    $action = preg_replace('/[^a-z]+/', '', $_POST['action']);
-    
-    $utility->deleteBeforeImport = isset($_POST['deletebeforeimport']);
-    
     echo '<div id="result">';
     echo '<h2>Result</h2>';
     echo '<pre>';
     
-    switch ($action) {
+    switch ($utility->action) {
 
         case 'check':
             $utility->log("Check paths\n");
