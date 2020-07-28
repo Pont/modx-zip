@@ -3,7 +3,7 @@
 /**
  * Install/Upgrade/Backup/Restore MODX
  *
- * This script will help you install, upgrade, backup and restore MODX Revolution. There 
+ * This script will help you install, upgrade, backup and restore MODX Revolution. There
  * already are some excellent scripts for this but they don't do all that I want.
  *
  * WARNING: I hope this script is as useful to you as it is to me. However, no guarantee
@@ -32,14 +32,14 @@
  * If you configure FTP and activate saveToRemote the file is also copied to the FTP server
  * with optional removal of the local file after successful copy.
  * By default this file, the core/cache dir, the backup dir and the session and manager_log
- * tables are excluded. 
+ * tables are excluded.
  *
  * The restore function looks in the backup dir for backup files and displays them. If you
  * activate restoreFromRemote it will list files on the FTP server instead.
  * Restoring the site will completely delete the current installation and replace it with
  * the backed up installation.
  *
- * The import function will take a zip file with the same paths as a backup file. Directories 
+ * The import function will take a zip file with the same paths as a backup file. Directories
  * outside of the installation must be specified in the includeInBackup config key.
  * This function may seem a bit redundant since the backup/restore function can be used to
  * import entire installations. It can, however, be used to import additional files to the site.
@@ -76,7 +76,7 @@
  *   - https://github.com/evolution-cms/installer
  *
  *
- * AUTHOR: Pontus Ågren (Pont)
+ * AUTHOR: Pontus Ã…gren (Pont)
  * VERSION: 2017-08-30
  *
  */
@@ -86,7 +86,7 @@ ini_set('max_execution_time', 600);
 ini_set('memory_limit', '256M');
 
 if ($_SERVER['HTTP_HOST'] != 'localhost') {
-    
+
     //-------------------------------------------------------------------------
     //  Configuration for LIVE site
     //-------------------------------------------------------------------------
@@ -95,7 +95,7 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
     define('PASSWORD', 'change to a personal password');
 
     $config = array(
-        
+
         /**
          * You can reuse a defined path by prefixing its name with a #, ex '#base_path/core'.
          * The path must have been defined before you can reuse it.
@@ -104,10 +104,10 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
          * However be very careful with this as you can wreck havoc on your server if you set
          * a path wrong. ALWAYS use "Check paths" before doing anything!
          */
-        
+
         // The root of the installation
         'base_path' => __DIR__,
-        
+
         // System paths
         'core_path' => '#base_path/core',
         'manager_path' => '#base_path/manager',
@@ -118,20 +118,20 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
         // and various temporary files used by the script.
         // Should be above the web root.
         'backup_path' => '#base_path/../backup',
-        
+
         // Directories to include in backup that is not part of MODX, for example media files stored
         // in a directory above the web root. These directories are not deleted on restore.
         'includeInBackup' => array(
             //'#base_path/../media'
         ),
-        
+
         // Directories to exclude in backup, add more if you need to.
         'excludeInBackup' => array(
             __FILE__,           // This file
             '#backup_path',     // can be removed if not in core path or web root
             '#core_path/cache'  // optional
         ),
-        
+
         // Directories and files to exclude from deletion when updating or importing a site.
         // Has no effect when restoring a site.
         'excludeOnDelete' => array(
@@ -147,25 +147,25 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
             '#base_path/apple-touch-icon-precomposed.png',
             '#manager_path/.htaccess'
         ),
-        
+
         // Tables to exclude from backup. Add and remove as you see fit. Do not use prefix. It is
         // included automatically from the config file.
         'excludeDB' => array(
             'session',
             'manager_log'
         ),
-        
+
         // Backup website before updating?
         // If the website is large running backup and update in one go may exceed max_execution_time.
         'backupBeforeUpdate' => false, // boolean
-        
+
         // Copy backup file to remote server?
         'saveToRemote' => false, // boolean
-        
+
         // Remove local copy of backup file when saving to remote server?
         // saveToRemote must be set to true for this to work.
         'removeLocalCopy' => false, // boolean
-        
+
         // Get listing of backup files and download backup file from remote server?
         'restoreFromRemote' => false, // boolean
 
@@ -177,10 +177,10 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
             'passive_mode' => false, // boolean
             'remote_path' => ''
         ),
-        
+
         // Attempt to run upgrade/install in cli mode?
         'usecli' => false, // boolean
-        
+
         // Data to use when installing via cli. Also used to update config.inc.php and all
         // config.core.php files. This is useful if you want to restore a backup from the live
         // server on your local dev server and vice versa. In this way you can develop a site
@@ -200,28 +200,28 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
             'https_port' => '443',
             'http_host' => 'mysite.com',
             'cache_disabled' => 0,
-            
+
             // Set this to 1 if you are using MODX from Git or extracted it from the full MODX
             // package to the server prior to installation.
             'inplace' => 0,
-            
+
             // Set this to 1 if you have manually extracted the core package from the file
             // core/packages/core.transport.zip.
             // This will reduce the time it takes for the installation process on systems that do
             // not allow the PHP time_limit and Apache script execution time settings to be altered.
             'unpacked' => 0,
-            
+
             // The language to install MODX for. This will set the default manager language to this. // Use IANA codes.
             'language' => 'en',
-            
+
             // Information for your administrator account
             'cmsadmin' => 'username',
             'cmspassword' => 'password',
             'cmsadminemail' => 'email@address.com',
-            
+
             // Path for your MODX core directory
             'core_path' => '#core_path',
-            
+
             // Paths for the default contexts that are installed
             'context_mgr_path' => '#manager_path',
             'context_mgr_url' => '/manager/',
@@ -231,36 +231,36 @@ if ($_SERVER['HTTP_HOST'] != 'localhost') {
             'context_web_url' => '/',
             'assets_path' => '#assets_path',
             'assets_url' => '/assets/',
-            
+
             // Whether or not to remove the setup/ directory after installation
             'remove_setup_directory' => 1
         ),
-        
+
         // Should config.inc.php and the config.core.php files be automatically updated after a
         // restore? Use when restoring a site on different server. Saves you from having to update
         // configuration files by hand.
         // Uses data from the xmldata options.
         'updateConfigFilesAfterRestore' => false,
-        
+
         // Use addFromString (true) or addFile (false)
         // addFromString uses A LOT of memory. Set to false if you run into memory limit problems.
         'addFromString' => true,
-        
+
         // Compress archive?
         'compressArchive' => true,
-        
+
         // Should this file be removed after update/install?
         'removeThisFile' => false // boolean
     );
-    
+
 } else {
-    
+
     //-------------------------------------------------------------------------
     //  Configuration for LOCAL site
     //-------------------------------------------------------------------------
 
     define('PASSWORD', '');
-    
+
     $config = array(
         'base_path' => __DIR__,
         'core_path' => '#base_path/core',
@@ -360,44 +360,41 @@ header('Content-Type: text/html; charset=UTF-8');
  *  https://github.com/maennchen/ZipStream-PHP
  *  http://www.tinybutstrong.com/apps/tbszip/tbszip_help.html
  *  http://www.phpconcept.net/pclzip
- *  
+ *
  *
  */
 
 
 class Zip extends ZipArchive
 {
-    
+
     private $excludeInZip = array(),
             $compress = false,
             $root = '';
-    
+
     public function setExcluded($dirs)
     {
         $this->excludeInZip = $dirs;
     }
-    
+
     public function setMethod($fromString)
     {
         $this->fromString = $fromString;
     }
-    
+
     public function setCompression($compress)
     {
         $this->compress = $compress;
     }
-    
+
     public function setRoot($dir)
     {
         $this->root = $dir;
     }
-    
+
     public function addOne($filename, $localname)
     {
         if ($this->fromString) {
-            /* $content = file_get_contents($filename);
-            $success = $this->addFromString($localname, $content);
-            unset($content); */
             $success = $this->addFromString($localname, file_get_contents($filename));
         } else {
             $success = $this->addFile($filename, $localname);
@@ -407,7 +404,7 @@ class Zip extends ZipArchive
         }
         return $success;
     }
-    
+
     public function addAll($path)
     {
         $nodes = glob($path . '/{*,.htaccess}', GLOB_BRACE);
@@ -458,12 +455,12 @@ class ModxUtilities {
             $file = null,
             $password = null,
             $deletebeforeimport = null;
-            
+
     public $installed,
            $action = null,
            $currentversion = '',
            $currentdistro = '';
-    
+
     public function __construct($config) {
         $this->setVariables($config);
         $this->setPostedProperties();
@@ -474,22 +471,22 @@ class ModxUtilities {
         $this->zip->setCompression($this->config->compressArchive);
         $this->timestamp = date('ymd_His');
     }
-    
+
     public function log($msg, $em = false, $date = true) {
         $this->log[] = ($date ? date('H:i:s  ') : '          ') . ($em ? "<span>$msg</span>" : $msg);
     }
     public function getLog() {
         return implode("\n", $this->log);
     }
-    
+
     public function authenticated() {
         return $this->password;
     }
-    
+
     public function getConfig($key) {
         return property_exists($this->config, $key) ? $this->config->$key : null;
     }
-    
+
     // http://edmondscommerce.github.io/php/php-realpath-for-none-existant-paths.html
     // Updated to work with windows paths
     private function normalizePath($path) {
@@ -524,7 +521,7 @@ class ModxUtilities {
         }
         return $value;
     }
-    
+
     private function setVariables($config) {
         $this->config = (object)$config;
         foreach ($this->config as $key => $value) {
@@ -532,7 +529,7 @@ class ModxUtilities {
         }
         $this->config->ftp = (object)$this->config->ftp;
     }
-    
+
     private function setPostedProperties() {
         $variables = ['action', 'distro', 'version', 'backupfile', 'file', 'password', 'deletebeforeimport'];
         foreach ($variables as $key) {
@@ -565,7 +562,7 @@ class ModxUtilities {
             }
         }
     }
-    
+
     private function checkInstalled() {
         $this->installed = is_readable($this->config->core_path . '/config/config.inc.php');
         if ($this->installed) {
@@ -577,7 +574,7 @@ class ModxUtilities {
             $this->includeConfig();
         }
     }
-    
+
     private function includeConfig() {
         if (is_readable($this->config->core_path . '/config/config.inc.php')) {
             require $this->config->core_path . '/config/config.inc.php';
@@ -591,7 +588,7 @@ class ModxUtilities {
             $this->db = new DB($dbase, $database_dsn, $database_user, $database_password);
         }
     }
-    
+
     private function getSiteName() {
         if ($this->db) {
             $stmt = $this->db->prepare("SELECT `value` FROM " . $this->config->table_prefix . "system_settings WHERE `key`='site_name'");
@@ -609,7 +606,7 @@ class ModxUtilities {
         }
         return '';
     }
-    
+
     public function getLatestVersion() {
         $version = '';
         if (isset($_SESSION['version'])) {
@@ -648,7 +645,7 @@ class ModxUtilities {
             $page = curl_exec($ch);
             curl_close($ch);
             if ($page !== false) {
-                preg_match('/' . preg_quote('<h2>Current Version – ') . '([\d\.]+).*' . preg_quote('</h2>', '/') . '/', $page, $match);
+                preg_match('/' . preg_quote('<h2>Current Version ï¿½ ') . '([\d\.]+).*' . preg_quote('</h2>', '/') . '/', $page, $match);
                 if (isset($match[1])) {
                     $_SESSION['version'] = $match[1];
                     $version = $match[1];
@@ -706,7 +703,7 @@ class ModxUtilities {
         curl_close($ch);
         return $headers;
     }
-    
+
     private function download($url, $path) {
         $fp = fopen($path, 'w+');
         $ch = curl_init();
@@ -754,7 +751,7 @@ class ModxUtilities {
                 }
             }
             $this->log('Files zipped');
-            
+
             $sqlfile = $this->exportSQL();
             if ($sqlfile && $this->zip->addOne($this->config->backup_path . '/' . $sqlfile, $sqlfile)) {
                 $this->log('SQL file added to zip');
@@ -762,7 +759,7 @@ class ModxUtilities {
                 $this->log('Could not add SQL file to zip', true);
                 $return = false;
             }
-        
+
             if ($this->zip->close()) {
                 unlink($this->config->backup_path . '/' . $sqlfile);
                 $this->log('Zip file closed');
@@ -786,7 +783,7 @@ class ModxUtilities {
         }
         return $return;
     }
-    
+
     private function saveToRemote($zipfile) {
         $this->log('Copying zip file to remote server');
         $handle = fopen($this->config->backup_path . '/' . $zipfile, 'r');
@@ -802,7 +799,7 @@ class ModxUtilities {
         $error = curl_error($ch);
         curl_close($ch);
         fclose($handle);
-        
+
         if ($uploaded) {
             $this->log('Zipfile copied to remote server');
         } else {
@@ -811,7 +808,7 @@ class ModxUtilities {
         }
         return $uploaded;
     }
-    
+
     private function listRemoteFiles() {
         $ch = curl_init();
         curl_setopt_array($ch, array(
@@ -833,7 +830,6 @@ class ModxUtilities {
         $remoteFiles = $this->listRemoteFiles();
         $files = array();
         if ($remoteFiles !== false) {
-            //$timestamp = preg_replace('/[^\d]/', '', $this->backupfile);
             $remote_file = false;
             foreach ($remoteFiles as $file) {
                 if (strpos($file, vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.zip') !== false) {
@@ -845,7 +841,7 @@ class ModxUtilities {
                 $this->log('Could not find remote file. Aborting!', true);
                 return false;
             }
-            
+
             $local_file = $this->config->backup_path . '/_site_backup_' . time() . '.zip';
             $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.sql';
 
@@ -862,7 +858,7 @@ class ModxUtilities {
             $error = curl_error($ch);
             curl_close($ch);
             fclose($handle);
-            
+
             if ($downloaded) {
                 $this->log('Remote file downloaded');
                 if (is_readable($local_file)) {
@@ -897,7 +893,6 @@ class ModxUtilities {
     }
 
     public function restore() {
-        //$timestamp = preg_replace('/[^\d]/', '', $this->backupfile);
         $files = glob($this->config->backup_path . '/site_backup_*' . vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.zip', GLOB_BRACE);
         $zip_file = basename($files[0]);
         $sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($this->backupfile, 6)) . '.sql';
@@ -919,14 +914,14 @@ class ModxUtilities {
             $this->log('Cannot access the archive file. Aborting!', true);
         }
     }
-    
+
     private function getLanguage() {
         $stmt = $this->db->prepare("SELECT `value` FROM " . $this->config->table_prefix . "system_settings WHERE `key`='manager_language'");
         $stmt->execute();
         $language = $stmt->fetch(PDO::FETCH_OBJ);
         return $language->value;
     }
-    
+
     public function getBackupFiles() {
         $site_name = $this->getSiteName();
         if ($site_name) {
@@ -943,7 +938,7 @@ class ModxUtilities {
             return array(preg_replace('/[^\d]/', '', basename($v)), $site_name);
         }, $files);
     }
-    
+
     public function getRemoteBackupFiles() {
         $remoteFiles = $this->listRemoteFiles();
         $files = array();
@@ -967,7 +962,7 @@ class ModxUtilities {
         }
         return $files;
     }
-    
+
     public function import() {
         if ($this->file && is_readable($this->config->backup_path . '/' . $this->file)) {
             $this->filename = $this->file;
@@ -976,13 +971,13 @@ class ModxUtilities {
                 //$sqlfile = 'db_backup_' . vsprintf('%s_%s', str_split($this->file, 6)) . '.sql';
                 //$this->importSQL($sqlfile);
             } else {
-                
+
             }
         } else {
             $this->log('File could not be read. Aborting!', true);
         }
     }
-    
+
     private function importFile() {
         $this->installOrUpgrade = false;
         $return = $this->unpackFiles();
@@ -999,27 +994,27 @@ class ModxUtilities {
         }
         return $return;
     }
-        
+
     public function update() {
         $this->installOrUpgrade = true;
-        
+
         if (! $this->distro) {
             $this->log('Incorrect distro. Aborting!', true);
             return false;
         }
-        
+
         if (! $this->version) {
             $this->log('Incorrect version numbering. Aborting!', true);
             return false;
         }
-        
+
         $current = vsprintf("%s%02s%02s", explode('.', $this->currentversion));
         $new = vsprintf("%s%02s%02s", explode('.', $this->version));
         if ($new < $current) {
             $this->log('New version (' . $this->version . ') is older than current version (' . $this->currentversion . '). Aborting!', true);
             return false;
         }
-        
+
         if ($this->getFile()) {
             if ($this->config->backupBeforeUpdate) {
                 $this->log('Running backup');
@@ -1036,7 +1031,7 @@ class ModxUtilities {
                 $this->deltree($this->config->core_path . '/cache', false, true);
                 restore_error_handler();
             }
-            
+
             /*
             // From Janitor by Shamblett
             // Remove the core directory and the transport.zip
@@ -1093,7 +1088,7 @@ class ModxUtilities {
             }
             unset($modx);
             */
-            
+
             if ($this->unpackFiles()) {
                 $manual_install = true;
                 if ($this->config->usecli) {
@@ -1125,26 +1120,26 @@ class ModxUtilities {
             }
         }
     }
-    
+
     public function install() {
         if ($this->installed) {
             $this->log('MODX already installed. Aborting!', true);
             return false;
         }
-        
+
         $this->installOrUpgrade = true;
         $this->newInstall = true;
-        
+
         if (! $this->distro) {
             $this->log('Incorrect distro. Aborting!', true);
             return false;
         }
-        
+
         if (! $this->version) {
             $this->log('Incorrect version numbering. Aborting!', true);
             return false;
         }
-        
+
         if ($this->getFile()) {
             if ($this->unpackFiles()) {
                 $manual_install = true;
@@ -1177,7 +1172,7 @@ class ModxUtilities {
             }
         }
     }
-    
+
     private function unpackFiles() {
         $return = true;
         $zip_file = $this->config->backup_path . '/' . $this->filename;
@@ -1280,13 +1275,13 @@ class ModxUtilities {
                     }
                 }
                 zip_close($zip);
-                
+
                 if ($return) {
                     $this->log('Files unpacked');
                 } else {
                     $this->log('There were problems unpacking the files', true);
                 }
-                
+
             } else {
                 $this->log('Could not open the zip file!', true);
                 $return = false;
@@ -1297,7 +1292,7 @@ class ModxUtilities {
         }
         return $return;
     }
-    
+
     public function delete() {
         set_error_handler(array($this, 'rmdirHandler'), E_WARNING);
         $this->deltree($this->config->core_path);
@@ -1305,7 +1300,7 @@ class ModxUtilities {
         restore_error_handler();
         $this->log('The installation is deleted. The database is still intact.');
     }
-    
+
     private function deltree($dirname, $filtered = false, $root = false) {
         if (!is_dir($dirname)) {
             return false;
@@ -1323,7 +1318,7 @@ class ModxUtilities {
             rmdir($dirname);
         }
     }
-    
+
     private function rmdirHandler($errno, $errstr) {
         $this->log($errstr, true);
     }
@@ -1334,30 +1329,30 @@ class ModxUtilities {
      * @param: $selected - text
      */
     private function exportSQL() {
-        
+
         $this->log('Exporting database');
-        
+
         // http://davidwalsh.name/backup-mysql-database-php
-        
+
         //get all of the tables
         $stmt = $this->db->prepare('SHOW TABLES');
         $stmt->execute();
         $all = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
         $tables = array();
         foreach ($all as $table) {
             $tables[] = $table['Tables_in_' . $this->config->dbase];
         }
-        
+
         $sqlfile = 'db_backup_' . $this->timestamp . '.sql';
-        
+
         $handle = fopen($this->config->backup_path . '/' . $sqlfile, 'w+');
-        
+
         $stmt = $this->db->prepare("SHOW VARIABLES WHERE Variable_name='max_allowed_packet'");
         $stmt->execute();
         $max_allowed_packet = $stmt->fetch(PDO::FETCH_ASSOC);
         $max_length = $max_allowed_packet['Value'] < 100000 ? $max_allowed_packet['Value'] : 100000;
-        
+
         $to_print = "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
 /*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
@@ -1382,9 +1377,9 @@ class ModxUtilities {
             foreach ($columns as $col) {
                 $column[] = $col['Field'];
             }
-            
+
             $to_print = 'DROP TABLE IF EXISTS `' . $table . '`;';
-            
+
             $stmt = $this->db->prepare('SHOW CREATE TABLE ' . $table);
             $stmt->execute();
             $create = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1392,27 +1387,27 @@ class ModxUtilities {
             if (in_array(str_replace($this->config->table_prefix, '', $table), $this->config->excludeDB)) {
                 $create['Create Table'] = preg_replace('/AUTO_INCREMENT=\d+/', 'AUTO_INCREMENT=1', $create['Create Table']);
             }
-            
+
             $to_print .= "\n\n" . $create['Create Table'] . ";\n\n";
             if ($this->fwrite_stream($handle, $to_print) === false) {
                 return false;
             }
-            
+
             if (!in_array(str_replace($this->config->table_prefix, '', $table), $this->config->excludeDB)) {
                 $to_print = "LOCK TABLES `$table` WRITE;\n/*!40000 ALTER TABLE `$table` DISABLE KEYS */;\n\n";
                 if ($this->fwrite_stream($handle, $to_print) === false) {
                     return false;
                 }
-            
+
                 $insert_into = 'INSERT INTO `' . $table . '` (`' . implode('`,`', $column) . "`) VALUES\n";
 
                 $stmt = $this->db->prepare('SELECT * FROM ' . $table);
                 $stmt->execute();
                 $num_fields = $stmt->columnCount();
-                
+
                 $length = 0;
                 $rows = array();
-                
+
                 while ($row = $stmt->fetch(PDO::FETCH_NUM)) {
                     if (empty($rows)) {
                         $length += strlen($insert_into);
@@ -1448,23 +1443,23 @@ class ModxUtilities {
 
                     $rows[] = $row;
                     $length += $row_length;
-                    
+
                 }
-                
+
                 if (!empty($rows)) {
                     $to_print = $insert_into . implode(",\n", $rows) . ";\n\n";
                     if ($this->fwrite_stream($handle, $to_print) === false) {
                         return false;
                     }
                 }
-                    
+
                 $to_print = "/*!40000 ALTER TABLE `$table` ENABLE KEYS */;\nUNLOCK TABLES;\n\n\n\n";
                 if ($this->fwrite_stream($handle, $to_print) === false) {
                     return false;
                 }
             }
         }
-        
+
         $to_print = "/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
@@ -1478,11 +1473,11 @@ class ModxUtilities {
         }
 
         fclose($handle);
-        
+
         $this->log('Database exported');
         return $sqlfile;
     }
-    
+
     private function fwrite_stream($fp, $string) {
         for ($written = 0; $written < strlen($string); $written += $fwrite) {
             $fwrite = fwrite($fp, substr($string, $written));
@@ -1493,10 +1488,10 @@ class ModxUtilities {
         }
         return $written;
     }
-    
+
     private function importSQL($sqlfile) {
         $this->db->setAttribute(PDO::ATTR_EMULATE_PREPARES, 0);
-        
+
         if (is_readable($this->config->backup_path . '/' . $sqlfile)) {
             $sql = file_get_contents($this->config->backup_path . '/' . $sqlfile);
             $this->log('Importing DB');
@@ -1520,7 +1515,7 @@ class ModxUtilities {
             $this->log('Could not read SQL file', true);
         }
     }
-    
+
     private function createConfigXML() {
         if ($this->installed) {
             $language = $this->getLanguage();
@@ -1553,7 +1548,7 @@ class ModxUtilities {
             return false;
         }
     }
-    
+
     private function updateConfigIncFile() {
         if (is_readable($this->config->core_path . '/docs/config.inc.tpl')) {
             $data = array(
@@ -1596,7 +1591,7 @@ class ModxUtilities {
             $this->log('Could not find config.inc.tpl', true);
         }
     }
-    
+
     private function updateConfigCoreFiles() {
         $content = file($this->config->base_path . '/config.core.php');
         if (strpos($content[1], $this->config->core_path . '/') === false) {
@@ -1852,20 +1847,20 @@ if (is_null($utility->action)) {
 </form>
 </body>
 </html>
-    
+
 <?php
-    
+
 } else if ($utility->authenticated() === true) {
 
     echo '<div id="result">';
     echo '<h2>Result</h2>';
     echo '<pre>';
-    
+
     switch ($utility->action) {
 
         case 'check':
             $utility->log("Check paths\n");
-            
+
             if ($utility->installed) {
                 $utility->log('MODX paths in config.inc.php', false, false);
                 $utility->log('----------------------------', false, false);
@@ -1902,17 +1897,17 @@ if (is_null($utility->action)) {
             $utility->log('Exclude on delete: ', false, false);
             $utility->log('    ' . implode("\n              ", $utility->getConfig('excludeOnDelete')), false, false);
             break;
-        
+
         case 'backup':
             $utility->log('Backup website');
             $utility->backup();
             break;
-        
+
         case 'import':
             $utility->log('Import website');
             $utility->import();
             break;
-            
+
         case 'restore':
             if ($utility->getConfig('restoreFromRemote')) {
                 $utility->log('Restore website from remote backup');
@@ -1922,26 +1917,26 @@ if (is_null($utility->action)) {
                 $utility->restore();
             }
             break;
-            
+
         case 'update':
             $utility->log('Update website');
             $utility->update();
             break;
-            
+
         case 'install':
             $utility->log('Install website');
             $utility->install();
             break;
-            
+
         case 'delete':
             $utility->log('Delete website');
             $utility->delete();
             break;
-            
+
     }
-    
+
     echo $utility->getLog();
-    
+
     $end = microtime(true);
     echo "\n\nExecution time: " . round($end - $start, 2) . " s";
     echo "\nPeak memory usage: " . (memory_get_peak_usage(true) / 1024 / 1024) . ' MB';
